@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>SMARTLend</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/12.9.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore-compat.js"></script>
+
+<!-- XLSX -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<style>
+body{font-family:Arial;background:#2a2a2a;padding:20px;}
+.container{max-width:1000px;margin:auto;background:white;border-radius:5px;}
+.header{background:#333;color:white;padding:20px;text-align:center;}
+.content{padding:20px;}
+
+.form-group{display:flex;gap:10px;flex-wrap:wrap;}
+input,button{padding:8px;border:1px solid #ccc;border-radius:4px;}
+button{cursor:pointer;color:white;}
+button[type="submit"]{background:#4CAF50;}
+
+.controls{display:none;margin-top:10px;gap:10px;flex-wrap:wrap;}
+#removeOfflineBtn{background:#f44336;}
+#exportExcelBtn{background:#2196F3;}
+#exportTextBtn{background:#FF9800;}
+
+.admin-btn{background:#555;margin-bottom:10px;}
+
+table{width:100%;border-collapse:collapse;margin-top:10px;}
+th{background:#444;color:white;padding:10px;}
+td{padding:8px;border:1px solid #ddd;}
+
+.status-online{background:#c8e6c9;color:#2e7d32;padding:3px 8px;border-radius:3px;}
+.status-offline{background:#ffcccc;color:#c62828;padding:3px 8px;border-radius:3px;}
+
+.action-btn{padding:5px 10px;border:none;border-radius:3px;}
+.return-btn{background:#4CAF50;}
+.remove-btn{background:#f44336;}
+
+/* ===== MOBILE UI FIX ===== */
+@media (max-width: 600px){
+
+body{
+    padding:8px;
+}
+
+.container{
+    border-radius:10px;
+}
+
+.header h1{
+    font-size:22px;
+}
+
+.content{
+    padding:15px;
+}
+
+.form-group{
+    flex-direction:column;
+    gap:12px;
+}
+
+input,button{
+    width:100%;
+    font-size:16px;
+    padding:12px;
+}
+
+.admin-btn{
+    width:100%;
+    margin-bottom:8px;
+}
+
+.controls{
+    flex-direction:column;
+    gap:8px;
+}
+
+.controls button{
+    width:100%;
+}
+
+table{
+    display:block;
+    overflow-x:auto;
+    white-space:nowrap;
+    font-size:14px;
+}
+
+th, td{
+    padding:6px;
+    font-size:13px;
+}
+
+.action-btn{
+    width:100%;
+    padding:8px;
+    font-size:14px;
+}
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+<div class="header"><h1>SMARTLend</h1></div>
+<div class="content">
+
+<button class="admin-btn" id="loginAdminBtn" onclick="loginAdmin()">Admin Login</button>
+<button class="admin-btn" id="logoutAdminBtn" onclick="logoutAdmin()" style="display:none;">Logout Admin</button>
+
+<form id="logForm">
+<div class="form-group">
+<input id="deviceName" type="text" placeholder="Device (PC 1-50 or TB 1-50)" required>
+<input id="borrowerName" type="text" placeholder="Borrower's name" required>
+<input type="date" id="dateBorrowed" readonly>
+<button type="submit">Add & Start</button>
+</div>
+</form>
+
+<div class="controls" id="controls">
+<button id="removeOfflineBtn">Remove All Offline</button>
+<button id="exportExcelBtn">Export Excel</button>
+<button id="exportTextBtn">Export Text</button>
+</div>
+
+<table>
+<thead>
+<tr>
+<th>Device</th>
+<th>Status</th>
+<th>Borrower</th>
+<th>Time</th>
+<th>Date</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody id="logTableBody"></tbody>
+</table>
+
+</div>
+</div>
+
+<script>
+const firebaseConfig = {
+ apiKey: "AIzaSyA9rUf3tC0ctPOmJOCe-lenhc_cW8H24Zs",
+ authDomain: "smartlend-902bb.firebaseapp.com",
+ projectId: "smartlend-902bb",
+ storageBucket: "smartlend-902bb.appspot.com",
+ messagingSenderId: "181068024420",
+ appId: "1:181068024420:web:beddb87077638f59f9ed71"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+/* ===== PH TIME FIX (UTC+8) ===== */
+function getPHDate(){
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const ph = new Date(utc + (8 * 60 * 60 * 1000));
+    return ph.toISOString().slice(0,10);
+}
+function isTodayPH(dateString){
+    return dateString === getPHDate();
+}
+
+/* ===== GLOBALS ===== */
+const ADMIN_PASSWORD="admin123";
+let adminMode = localStorage.getItem("adminMode") === "true";
+
+const tableBody=document.getElementById('logTableBody');
+const form=document.getElementById('logForm');
+const deviceInput=document.getElementById('deviceName');
+const borrowerInput=document.getElementById('borrowerName');
+const dateInput=document.getElementById('dateBorrowed');
+
+const controlsDiv=document.getElementById('controls');
+const removeOfflineBtn=document.getElementById('removeOfflineBtn');
+const exportExcelBtn=document.getElementById('exportExcelBtn');
+const exportTextBtn=document.getElementById('exportTextBtn');
+
+const today=getPHDate();
+dateInput.value=today;
+dateInput.min=today;
+dateInput.max=today;
+
+/* ===== ADMIN ===== */
+function loginAdmin(){
+    const pass=prompt("Admin password:");
+    if(pass===ADMIN_PASSWORD){
+        adminMode=true;
+        localStorage.setItem("adminMode","true");
+        controlsDiv.style.display="flex";
+        logoutAdminBtn.style.display="inline-block";
+        loginAdminBtn.style.display="none";
+        render();
+    } else alert("Wrong password.");
+}
+function logoutAdmin(){
+    adminMode=false;
+    localStorage.setItem("adminMode","false");
+    controlsDiv.style.display="none";
+    logoutAdminBtn.style.display="none";
+    loginAdminBtn.style.display="inline-block";
+    render();
+}
+if(adminMode){
+    controlsDiv.style.display="flex";
+    logoutAdminBtn.style.display="inline-block";
+    loginAdminBtn.style.display="none";
+}
+
+/* ===== HELPERS ===== */
+function normalizeDevice(name){
+    name=name.trim().toUpperCase().replace(/\s+/g,' ');
+    const match=name.match(/^(PC|TB)\s*(\d+)$/);
+    if(match){
+        const n=Number(match[2]);
+        if(n>=1 && n<=50) return `${match[1]} ${n}`;
+    }
+    return null;
+}
+function formatElapsed(ms){
+    if(!ms) return '0h 0m 0s';
+    const s=Math.floor(ms/1000);
+    return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m ${s%60}s`;
+}
+function elapsedTime(start,end){
+    return formatElapsed((end??Date.now())-start);
+}
+
+/* ===== TABLE ===== */
+let logs=[];
+function render(){
+    tableBody.innerHTML='';
+    if(!logs.length){
+        tableBody.innerHTML='<tr><td colspan="6" style="text-align:center;color:#999;padding:30px;">No logs</td></tr>';
+        return;
+    }
+    logs.forEach(log=>{
+        const tr=document.createElement('tr');
+        const statusClass=log.status==='Online'?'status-online':'status-offline';
+        const statusText=log.status==='Online'?'🟢 Online':'🔴 Offline';
+
+        let action='';
+        if(log.status==='Online'){
+            action=`<button class="action-btn return-btn" onclick="markReturned('${log.id}')">Return</button>`;
+        }else if(adminMode){
+            action=`<button class="action-btn remove-btn" onclick="removeLog('${log.id}')">Remove</button>`;
+        }
+
+        tr.innerHTML=`
+        <td>${log.deviceName}</td>
+        <td><span class="${statusClass}">${statusText}</span></td>
+        <td>${log.borrowerName}</td>
+        <td>${elapsedTime(log.startTime,log.endTime)}</td>
+        <td>${log.dateBorrowed}</td>
+        <td>${action}</td>`;
+        tableBody.appendChild(tr);
+    });
+}
+
+/* ===== BUTTON EVENTS ===== */
+removeOfflineBtn.addEventListener('click', async ()=>{
+    if(!adminMode) return alert("Admin only");
+    const offline=logs.filter(l=>l.status==='Offline');
+    await Promise.all(offline.map(l=>db.collection("logs").doc(l.id).delete()));
+});
+
+exportTextBtn.addEventListener('click', ()=>{
+    if(!logs.length) return alert("No logs");
+    let text="Device\tStatus\tBorrower\tTime\tDate\n";
+    logs.forEach(l=>{
+        text+=`${l.deviceName}\t${l.status}\t${l.borrowerName}\t${elapsedTime(l.startTime,l.endTime)}\t${l.dateBorrowed}\n`;
+    });
+    const blob=new Blob([text],{type:'text/plain'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=`logs_${today}.txt`;
+    a.click();
+});
+
+exportExcelBtn.addEventListener('click', ()=>{
+    if(!logs.length) return alert("No logs");
+    const wb=XLSX.utils.book_new();
+    const ws_data=[["Device","Status","Borrower","Time","Date"]];
+    logs.forEach(l=>{
+        ws_data.push([l.deviceName,l.status,l.borrowerName,elapsedTime(l.startTime,l.endTime),l.dateBorrowed]);
+    });
+    const ws=XLSX.utils.aoa_to_sheet(ws_data);
+    XLSX.utils.book_append_sheet(wb,ws,"Logs");
+    XLSX.writeFile(wb,`logs_${today}.xlsx`);
+});
+
+/* ===== ROW ACTIONS ===== */
+async function markReturned(id){
+    await db.collection("logs").doc(id).update({
+        status:"Offline",
+        endTime:Date.now()
+    });
+}
+async function removeLog(id){
+    if(!adminMode) return alert("Admin only");
+    await db.collection("logs").doc(id).delete();
+}
+
+/* ===== FORM ===== */
+form.addEventListener('submit', async e=>{
+    e.preventDefault();
+    const device=normalizeDevice(deviceInput.value);
+    const borrower=borrowerInput.value.trim();
+    const date=dateInput.value;
+
+    if(!isTodayPH(date)) return alert("Date locked to today.");
+    if(!device) return alert("Invalid device.");
+    if(logs.some(l=>l.deviceName===device && l.status==="Online"))
+        return alert(`${device} already online.`);
+
+    await db.collection("logs").add({
+        deviceName:device,
+        borrowerName:borrower,
+        status:'Online',
+        startTime:Date.now(),
+        endTime:null,
+        dateBorrowed:date,
+        createdAt:firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    deviceInput.value='';
+    borrowerInput.value='';
+});
+
+db.collection("logs").orderBy("createdAt","desc").onSnapshot(snapshot=>{
+    logs=[];
+    snapshot.forEach(doc=>logs.push({id:doc.id,...doc.data()}));
+    render();
+});
+</script>
+</body>
+</html>
